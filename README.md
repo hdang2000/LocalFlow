@@ -39,7 +39,9 @@ messages. Press **Fn + Space** again (or **Fn**, or click **Finish**) when you'r
 
 ![Transcribing](docs/screenshots/pill-transcribing.png)
 
-The text is pasted into the focused app, and your clipboard is restored right after.
+The text is pasted into the focused app. When LocalFlow can confirm a text field took it,
+your previous clipboard is restored; otherwise the transcript stays on the clipboard so
+**⌘V** still works.
 Changed your mind mid-recording? Press **Esc** to cancel.
 
 ### It never loses your words

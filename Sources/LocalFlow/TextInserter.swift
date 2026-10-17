@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 
 enum InsertOutcome {
     case pasted
+    /// Pasted, but the target couldn't be confirmed, so the transcript was
+    /// left on the clipboard instead of restoring the previous contents.
+    case pastedKeptOnClipboard
     /// No editable text field had focus, or secure input blocked pasting; the
     /// text is on the clipboard instead.
     case copiedNoTarget
@@ -17,7 +20,8 @@ enum TextInserter {
             copy(text)
             return .copiedSecureInput
         }
-        guard focusedElementAcceptsText() else {
+        let target = focusedTarget()
+        guard target != .none else {
             copy(text)
             return .copiedNoTarget
         }
@@ -29,6 +33,10 @@ enum TextInserter {
         let ourChange = pb.changeCount
 
         postCommandV()
+        // Restore the previous clipboard only when a text field certainly took
+        // the paste. Otherwise the paste may have gone nowhere, so the
+        // transcript stays on the clipboard for the user's own ⌘V.
+        guard target == .textField else { return .pastedKeptOnClipboard }
         // Give the target app time to read the clipboard before restoring it.
         try? await Task.sleep(nanoseconds: 350_000_000)
         if pb.changeCount == ourChange { restore(saved, to: pb) }
@@ -53,33 +61,35 @@ enum TextInserter {
         up?.post(tap: .cgAnnotatedSessionEventTap)
     }
 
+    enum Target { case textField, unknown, none }
+
     /// Asks Accessibility for the focused element's role only; its contents
-    /// are never read. Unknown roles are treated as editable, since many apps
-    /// (browsers, Electron editors) expose custom roles.
-    static func focusedElementAcceptsText() -> Bool {
+    /// are never read.
+    /// - textField: a known editable role, or an element whose value is settable.
+    /// - none: nothing focused that could take text (Finder/desktop, buttons…).
+    /// - unknown: the app doesn't say (common in Electron and web apps).
+    static func focusedTarget() -> Target {
         let system = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let element = focused else {
-            // Some apps don't expose focus at all; paste anyway and let them decide.
-            return focusQueryUnsupported()
+              let ref = focused, CFGetTypeID(ref) == AXUIElementGetTypeID() else {
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            return front == nil || front == "com.apple.finder" ? .none : .unknown
         }
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
-        let nonText: Set<String> = [kAXButtonRole, kAXImageRole, kAXMenuItemRole, kAXCheckBoxRole,
-                                    kAXRadioButtonRole, kAXSliderRole, kAXListRole, kAXOutlineRole]
-        if let r = role as? String, nonText.contains(r) {
-            var settable: DarwinBoolean = false
-            AXUIElementIsAttributeSettable(element as! AXUIElement, kAXValueAttribute as CFString, &settable)
-            return settable.boolValue
-        }
-        return true
-    }
-
-    /// When nothing reports focus, the desktop/Finder is usually frontmost.
-    private static func focusQueryUnsupported() -> Bool {
-        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        return front != "com.apple.finder" && front != nil
+        let element = ref as! AXUIElement
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+        let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSearchField"]
+        if textRoles.contains(role) { return .textField }
+        var settable: DarwinBoolean = false
+        AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+        if settable.boolValue { return .textField }
+        let nonText: Set<String> = [kAXButtonRole, kAXImageRole, kAXMenuItemRole, kAXCheckBoxRole, kAXRadioButtonRole,
+                                    kAXSliderRole, kAXListRole, kAXOutlineRole, kAXTableRole, kAXWindowRole,
+                                    kAXScrollAreaRole, kAXToolbarRole, kAXMenuBarRole]
+        if nonText.contains(role) { return .none }
+        return .unknown
     }
 
     private static func snapshot(_ pb: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {

@@ -289,7 +289,7 @@ final class AppController: HotkeyDelegate {
 
     @MainActor private func report(_ outcome: InsertOutcome, text: String) {
         switch outcome {
-        case .pasted:
+        case .pasted, .pastedKeptOnClipboard:
             indicator.show(.hidden)
         case .copiedNoTarget:
             indicator.show(.notice("No text field focused — copied. Click a text box and press ⌘V.", isError: false, canRetry: false),
