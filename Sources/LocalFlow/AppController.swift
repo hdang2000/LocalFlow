@@ -28,6 +28,7 @@ final class AppController: HotkeyDelegate {
     static let didChange = Notification.Name("LocalFlowControllerDidChange")
     private(set) var state: State = .idle {
         didSet {
+            if state != oldValue { DebugLog.write("state \(oldValue) -> \(state)") }
             // The idle clock runs only between dictations.
             if state == .idle { scheduleIdleUnload() } else { idleUnloadTimer?.invalidate() }
             changed()
@@ -49,6 +50,8 @@ final class AppController: HotkeyDelegate {
 
     private var recordStart = Date()
     private var pttPressedAt = Date()
+    /// Whether the push-to-talk key is physically down right now.
+    private var pttDown = false
     private var limitTimer: Timer?
     private var idleUnloadTimer: Timer?
     /// True when the model was unloaded for being idle (not still loading).
@@ -136,6 +139,7 @@ final class AppController: HotkeyDelegate {
 
     func pushToTalkPressed() {
         pttPressedAt = Date()
+        pttDown = true
         switch state {
         case .idle: startRecording(handsFree: false)
         case .recording(handsFree: true): finish() // tapping PTT ends hands-free mode
@@ -144,6 +148,7 @@ final class AppController: HotkeyDelegate {
     }
 
     func pushToTalkReleased() {
+        pttDown = false
         guard state == .recording(handsFree: false) else { return }
         if Date().timeIntervalSince(pttPressedAt) < 0.35 {
             discardRecording()
@@ -210,6 +215,12 @@ final class AppController: HotkeyDelegate {
                 recordStart = Date()
                 state = .recording(handsFree: handsFree)
                 indicator.show(.listening(handsFree: handsFree))
+                // The key may have been released while the mic was starting.
+                if !handsFree && !pttDown {
+                    DebugLog.write("ptt released before recording started")
+                    pushToTalkReleased()
+                    return
+                }
                 if settings.playSounds { NSSound(named: "Tink")?.play() }
                 startLimitTimer()
             } catch {

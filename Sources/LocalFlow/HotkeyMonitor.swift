@@ -65,6 +65,13 @@ final class HotkeyMonitor {
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // Events were lost while disabled; resync with the real key state.
+            let held = CGEventSource.flagsState(.combinedSessionState).contains(pttKeyCodes().flag)
+            DebugLog.write("tap re-enabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input")), ptt held=\(held)")
+            if pttHeld && !held {
+                pttHeld = false
+                delegate?.pushToTalkReleased()
+            }
             return Unmanaged.passUnretained(event)
         }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -74,10 +81,14 @@ final class HotkeyMonitor {
             let (codes, flag) = pttKeyCodes()
             if codes.contains(keyCode) {
                 let down = flags.contains(flag)
-                if down && !pttHeld {
+                DebugLog.write("ptt key \(down ? "down" : "up") (held=\(pttHeld))")
+                if down {
+                    // A press while we think the key is already held means the
+                    // release was never delivered; treat it as a fresh press.
+                    if pttHeld { delegate?.pushToTalkReleased() }
                     pttHeld = true
                     delegate?.pushToTalkPressed()
-                } else if !down && pttHeld {
+                } else if pttHeld {
                     pttHeld = false
                     delegate?.pushToTalkReleased()
                 }
@@ -94,7 +105,7 @@ final class HotkeyMonitor {
         let hf = shortcuts.handsFree
         if hf.withPushToTalkKey {
             if pttHeld && keyCode == Int64(hf.keyCode) {
-                if !isRepeat { delegate?.handsFreeToggled() }
+                if !isRepeat { DebugLog.write("hands-free chord"); delegate?.handsFreeToggled() }
                 return nil
             }
         } else if matches(hf, keyCode: keyCode, flags: flags) {
@@ -103,6 +114,7 @@ final class HotkeyMonitor {
         }
 
         if pttHeld {
+            DebugLog.write("other key \(keyCode) while ptt held")
             delegate?.pushToTalkInterrupted()
             return Unmanaged.passUnretained(event)
         }

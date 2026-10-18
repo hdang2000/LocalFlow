@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import LocalFlowCore
 import SwiftUI
 
@@ -12,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         handleTermination()
+        DebugLog.write("launched")
+        watchSecureInput()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
@@ -57,7 +60,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private var secureInputTimer: Timer?
+    private var secureInputOn = false
+
+    /// Secure Input hides every key press from LocalFlow; show it on the icon.
+    private func watchSecureInput() {
+        secureInputTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let on = IsSecureEventInputEnabled()
+            if on != self.secureInputOn {
+                self.secureInputOn = on
+                DebugLog.write("secure input \(on ? "ON - shortcuts unavailable" : "off")")
+                self.refreshIcon()
+            }
+        }
+    }
+
     private func refreshIcon() {
+        if secureInputOn && controller.state == .idle {
+            statusItem.button?.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "LocalFlow — shortcuts paused")
+            return
+        }
         let name: String
         switch controller.state {
         case .idle: name = "waveform"
@@ -75,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(disabled("Hold \(ptt) to dictate · \(s.shortcuts.handsFree.displayName.replacingOccurrences(of: "PTT", with: ptt)) hands-free"))
         if !AXIsProcessTrusted() {
             menu.addItem(item("⚠︎ Grant Accessibility permission…", #selector(openAccessibility)))
+        }
+        if IsSecureEventInputEnabled() {
+            menu.addItem(disabled("⚠︎ Shortcuts paused: another app has Secure Input on"))
+            menu.addItem(disabled("    (a password field, or Terminal → Secure Keyboard Entry)"))
         }
         let engine = controller.whisper.isRunning ? "ready (offline)"
             : controller.engineSleeping ? "sleeping — loads when you dictate" : "loading…"
