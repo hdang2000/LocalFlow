@@ -34,16 +34,21 @@ final class IndicatorPanel {
         didSet { if model.phase == .hidden || model.phase == .idle { show(.hidden) } }
     }
 
-    private lazy var panel: NSPanel = {
+    private lazy var panel: NSPanel = makePanel()
+
+    /// Created on the current desktop. It joins every Space, including other
+    /// apps' full-screen Spaces, and never takes focus from the app you type in.
+    private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 56),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        p.level = .statusBar
+        p.level = .screenSaver
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
         p.hidesOnDeactivate = false
         p.becomesKeyOnlyIfNeeded = true
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        p.isReleasedWhenClosed = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         let view = IndicatorView(model: model,
                                  cancel: { [weak self] in self?.onCancel?() },
                                  finish: { [weak self] in self?.onFinish?() },
@@ -52,7 +57,35 @@ final class IndicatorPanel {
                                  start: { [weak self] in self?.onStart?() })
         p.contentView = NSHostingView(rootView: view)
         return p
-    }()
+    }
+
+    private var spaceObserver: NSObjectProtocol?
+
+    init() {
+        // Follow the user to another desktop or full-screen app mid-dictation.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.model.phase != .hidden, self.panel.isVisible else { return }
+            self.bringToCurrentSpace(reason: "space changed")
+        }
+    }
+
+    /// Orders the pill front and verifies it landed on the visible desktop;
+    /// if macOS left it on another Space, rebuilds it here.
+    private func bringToCurrentSpace(reason: String) {
+        position()
+        panel.orderFrontRegardless()
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+        if !panel.isOnActiveSpace {
+            DebugLog.write("pill not on active space (\(reason), front=\(front)); rebuilding")
+            panel.orderOut(nil)
+            panel = makePanel()
+            position()
+            panel.orderFrontRegardless()
+        }
+        DebugLog.write("pill shown (\(reason)) onActiveSpace=\(panel.isOnActiveSpace) front=\(front)")
+    }
+
     private var hideWork: DispatchWorkItem?
 
     func show(_ requested: IndicatorModel.Phase, autoHideAfter seconds: Double? = nil) {
@@ -65,8 +98,7 @@ final class IndicatorPanel {
         }
         model.phase = phase
         guard phase != .hidden else { panel.orderOut(nil); return }
-        position()
-        panel.orderFrontRegardless()
+        bringToCurrentSpace(reason: "\(phase)".components(separatedBy: "(").first ?? "show")
         if let seconds {
             let work = DispatchWorkItem { [weak self] in self?.show(.hidden) }
             hideWork = work

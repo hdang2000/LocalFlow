@@ -278,6 +278,27 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-screenshots"), i + 1 <
     exit(0)
 }
 
+// Shows the real recording pill after a delay and reports whether macOS put
+// it on the visible desktop (for testing over full-screen apps):
+//   LocalFlow --pill-test [seconds]
+if let i = CommandLine.arguments.firstIndex(of: "--pill-test") {
+    _ = NSApplication.shared
+    NSApp.setActivationPolicy(.accessory)
+    let delay = Double(CommandLine.arguments.dropFirst(i + 1).first ?? "") ?? 4
+    let indicator = IndicatorPanel()
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        indicator.show(.listening(handsFree: false))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            let mine = list.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
+            print("frontmost:", NSWorkspace.shared.frontmostApplication?.localizedName ?? "?",
+                  "| pill on screen:", mine.isEmpty ? "NO" : "YES")
+            exit(0)
+        }
+    }
+    NSApp.run()
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
